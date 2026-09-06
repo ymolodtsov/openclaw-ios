@@ -586,6 +586,24 @@ struct RootTabsPresentationTests {
             nextTransportAgentID: "work"))
     }
 
+    @Test func `chat canvas identity stays stable for the captured owner not the view-model pointer`() {
+        let ownerA = ChatProTab.chatCanvasIdentity(ownerID: "gateway-a", transportAgentID: "main")
+        #expect(ownerA == ChatProTab.chatCanvasIdentity(ownerID: "gateway-a", transportAgentID: "main"))
+        #expect(ownerA != ChatProTab.chatCanvasIdentity(ownerID: "gateway-b", transportAgentID: "main"))
+        #expect(ownerA != ChatProTab.chatCanvasIdentity(ownerID: "gateway-a", transportAgentID: "work"))
+    }
+
+    @Test func `chat canvas does not remount on every view-model pointer`() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/Design/ChatProTab.swift"),
+            encoding: .utf8)
+        #expect(!source.contains(".id(ObjectIdentifier(viewModel))"))
+        #expect(source.contains("chatCanvasIdentity("))
+    }
+
     @Test func `workboard dispatch summary reports started and failures`() throws {
         let payload = Data(
             """
