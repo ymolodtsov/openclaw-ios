@@ -8,32 +8,45 @@ becoming a Messages clone or fighting OpenClaw's design language.
 `ymolodtsov/openclaw-ios`, then a follow-up upstream PR to
 `openclaw/openclaw`.
 
-**Scope of this pass:** `apps/ios` Chat/Design hosts, plus the shared canvas
-they actually render (`OpenClawChatUI`). Bubbles, transcript, and composer
-are not owned by `apps/ios/Sources/Chat`.
+**Scope of this pass:** plan only. The visual owners are:
+
+1. Shared canvas: `apps/shared/OpenClawKit/Sources/OpenClawChatUI/`
+   (bubbles, transcript, composer, theme, streaming, progress, tools)
+2. iOS shell: `apps/ios/Sources/Design/ChatProTab.swift` plus `DESIGN.md`
+3. Other live hosts of the same views: macOS `OpenClawChatWindowShell` and
+   macOS Quick Chat
+
+`apps/ios/Sources/Chat` is transport and the Control UI session dashboard.
+It does not own bubbles.
+
+**Cross-platform risk (read this first).** `OpenClawChatUI` is a shared
+SwiftPM target. Edits there ship to every native client, not just the iOS
+tab. An unguarded change in `ChatView.swift` or `ChatMessageViews.swift`
+will change macOS desktop chat and macOS Quick Chat in the same PR. Gate
+iOS-native motion and layout behind `#if os(iOS)`, `composerChrome`,
+`openClawChatDesktopLayout`, or
+`openClawAssistantBubblesInCleanChrome`. Treat macOS visual drift as a
+blocker for upstream, not a follow-up.
 
 ---
 
 ## 1. Chat UI architecture
 
 iOS Chat is a thin host around a shared SwiftUI canvas. Changing only
-`apps/ios/Sources/Chat` cannot polish bubbles or the composer.
+`apps/ios/Sources/Chat` cannot polish bubbles or the composer. Almost
+every punch-list item below edits `OpenClawChatUI`.
 
 ```text
-RootTabs / RootSidebar
+OpenClawChatUI (shared SwiftPM)
+  ChatView / ChatMessageViews / ChatComposer / ChatTheme / …
         │
-        ├── Chat tab ──────── ChatProTab (iOS host)
-        │                         │
-        │                         ├── toolbar: agent identity, gateway dot,
-        │                         │   expandable status, actions popover
-        │                         └── OpenClawChatView (shared canvas)
-        │                                   ├── transcript (LazyVStack)
-        │                                   ├── empty / loading / error overlays
-        │                                   ├── working claw + streaming bubble
-        │                                   └── OpenClawChatComposer (.clean)
-        │
-        └── Control / sidebar ── CommandCenterTab + RootSidebar
-                                  └── CommandSessionRow (session list)
+        ├── iOS ChatProTab (.clean, grey bubbles, composer on)
+        ├── macOS OpenClawChatWindowShell (.clean, desktop layout)
+        └── macOS QuickChatView (.clean, composer off, 300pt)
+
+iOS shell only (not shared)
+  ChatProTab toolbar / gateway dot / Preparing Chat
+  CommandCenterTab + RootSidebar session list
 ```
 
 ### iOS host (`apps/ios`)
@@ -60,16 +73,47 @@ composerChrome: .clean
 
 ### Shared canvas (`apps/shared/OpenClawKit/Sources/OpenClawChatUI`)
 
+This package is the real chat UI. Paths below are relative to that
+directory.
+
 | Surface | File | Role |
 |---|---|---|
-| Canvas shell | `ChatView.swift` | `OpenClawChatView`: transcript, overlays, jump-to-latest, keyboard live-edge restore |
-| Bubbles | `ChatMessageViews.swift` | `ChatMessageBubble`, `ChatBubbleShape`, typing/streaming/pending-tool bubbles, outbox footer |
-| Transcript rows | `ChatTranscriptRows.swift` | Message / system notice / history divider |
-| Composer | `ChatComposer.swift`, `ChatComposer+CleanControls.swift`, `CleanChatComposerControls.swift`, `ChatComposerTextViewIOS.swift` | Clean iOS composer: glass/material field, plus / permissions, model + effort, mic↔send swap |
-| Theme | `ChatTheme.swift` | iOS canvas gradient, red user bubble, `systemGray5` assistant bubble |
-| Session sheets | `ChatSheets.swift`, `ChatSessionSidebar.swift`, `ChatSessionManagementViews.swift` | Shared session UI (macOS switcher, iOS new-session options) |
-| Working state | `ChatWorkingClawView.swift`, `ChatStreamingReveal.swift` | Branded claw typing; word-fade streaming (Reduce Motion aware) |
-| State | `ChatViewModel.swift` and extensions | `isLoading`, errors, outbox, streaming, tool activity |
+| Canvas shell | `ChatView.swift` | `OpenClawChatView`: transcript `LazyVStack`, empty/loading/error overlays, jump-to-latest, keyboard live-edge restore. `#if os(iOS)` vs macOS layout constants already diverge (spacing, padding, initial scroll policy) |
+| Bubbles | `ChatMessageViews.swift` | `ChatMessageBubble`, `ChatBubbleShape` (tails onboarding-only), typing/streaming/pending-tool bubbles, outbox footer, `openClawAssistantBubblesInCleanChrome` |
+| Transcript rows | `ChatTranscriptRows.swift` | Message / system notice / history divider. Shared row model for every host |
+| Composer | `ChatComposer.swift`, `ChatComposer+CleanControls.swift`, `ChatComposer+Controls.swift`, `ChatComposer+Capabilities.swift`, `CleanChatComposerControls.swift`, `ChatComposerTextView.swift`, `ChatComposerTextViewIOS.swift` | `.clean` and `.full` chrome. iOS uses UITextView + glass/material surface; macOS uses NSTextView + desktop/compact editors |
+| Theme | `ChatTheme.swift` | Separate iOS and macOS palettes. iOS: canvas gradient, red user bubble, `systemGray5` assistant bubble. macOS: materials + `controlAccentColor` |
+| Streaming | `ChatStreamingReveal.swift` | Word-fade already shipped and Reduce Motion aware. Shared by all hosts. Do not retune in this polish |
+| Progress | `ChatProgressCard.swift` | Inserts above the composer. Already platform-split (iOS 26 glass / iOS 18 material / macOS `subtleCard`) |
+| Tools | `ChatToolActivityViews.swift` | Flat rows on purpose (“match Control UI, avoid card-in-card”). Expand animation already exists |
+| Working claw | `ChatWorkingClawView.swift` | Branded typing indicator. Shared. Already Reduce Motion aware |
+| Window shell | `ChatWindowShell.swift` | **macOS only.** `NavigationSplitView` + `ChatSessionSidebar` + `OpenClawChatView` (`.clean`, `openClawChatDesktopLayout = true`) |
+| Session sheets | `ChatSheets.swift`, `ChatSessionSidebar.swift`, `ChatSessionManagementViews.swift` | macOS sidebar/switcher; iOS uses `ChatNewSessionOptionsPopover` only |
+| State | `ChatViewModel.swift` and extensions | `isLoading`, errors, outbox, streaming, tool activity. Shared logic; do not fork |
+
+### Live hosts of `OpenClawChatView` (PR blast radius)
+
+| Host | File | How it configures the shared view | Risk if `OpenClawChatUI` changes unguarded |
+|---|---|---|---|
+| iOS Chat tab | `apps/ios/Sources/Design/ChatProTab.swift` | `.clean`, avatars off, grey assistant bubbles env, composer enabled when connected or offline-queueable, draws background | Intended target |
+| macOS desktop chat | `apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift` → `OpenClawChatWindowShell` | `.clean`, `drawsBackground: false`, desktop layout, session sidebar, composer enabled | **High.** Same `ChatView` / bubbles / composer / empty intro |
+| macOS Quick Chat | `apps/macos/Sources/OpenClaw/QuickChatView.swift` | `.clean`, avatars off, **composer disabled**, no background, fixed 300pt height, `.id(replyBinding.route)` | **High for overlay/empty/loading and row transitions.** Must not grow the composer or steal focus |
+| Previews / default | `ChatView+Previews.swift`; `composerChrome` defaults to `.full` | Onboarding style (tails) and full chrome still compile | Keep `.full` and `.onboarding` as no-ops for iOS-native motion |
+
+Watch chat is a separate UI (`WatchClawType`). Do not pull it into these PRs.
+
+Existing host-level gates to reuse (do not invent a fourth):
+
+- `#if os(iOS)` / `#if os(macOS)` — already used for layout, theme, composer text views
+- `composerChrome == .clean` vs `.full`
+- `openClawChatDesktopLayout` — macOS window only
+- `openClawAssistantBubblesInCleanChrome` — iOS Chat tab opts in; other clean hosts default off
+- `OpenClawChatView.Style.onboarding` — tails; preview-only in tree today
+
+`apps/ios/DESIGN.md` is the iOS design system for the shell (sidebar, glass
+chrome, tokens). Shared chat visuals are owned by `OpenClawChatTheme` +
+`OpenClawChatTypography`. Do not move bubble colors into `OpenClawProMetric`.
+Do not apply iOS Liquid Glass rules to macOS materials.
 
 ### Current iOS Chat configuration (deliberate)
 
@@ -82,6 +126,14 @@ composerChrome: .clean
 - Jump-to-latest is already gated so it does not flash on every reply.
 - Offline outbox is a product feature: placeholder becomes
   `Message {agent}; sends when connected`.
+
+### Shared-package change rule
+
+If a file is under `OpenClawChatUI/`, the PR description must name every
+host in the table above and say whether the diff is gated or shared.
+Shared-by-design (empty-state machine, keep last transcript) is allowed
+when it fixes a real flash on macOS too. Taste-only iOS motion is not
+allowed to leak.
 
 ---
 
@@ -127,6 +179,14 @@ mounted and change one presentation, not four.
 - Existing proof: `apps/ios/Tests/GatewayStatusBuilderTests.swift`
 - Add focused presentation tests next to
   `apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatReaderScrollStateTests.swift`
+
+**Cross-platform.** The overlay boolean soup lives in shared `ChatView`.
+macOS window and Quick Chat will pick up a presentation enum. That is
+desirable if it only removes flashes. Empty-string copy is already
+platform-split (`"Chat"` vs `"Start a Conversation"`). Do not replace
+macOS empty copy with iOS intro chips. Quick Chat has composer disabled,
+so `visibleEmptyAssistantIntro` is already false there — do not force
+intro chips into the 300pt reply pane.
 
 **Approach.**
 
@@ -184,6 +244,11 @@ Messages keeps the thread container and replaces rows.
 - `apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift`
   (`onChange(of: viewModel.sessionKey)`)
 
+**Cross-platform.** The `.id(ObjectIdentifier(viewModel))` remount is
+iOS-host-only. Safe to fix in `ChatProTab` without touching macOS.
+Quick Chat already remounts on `.id(self.replyBinding.route)` — leave
+that alone; it is a different identity (reply route, not gateway owner).
+
 **Approach.**
 
 1. Treat `.id(ObjectIdentifier(viewModel))` as guilty until proven required.
@@ -222,6 +287,12 @@ and three-dot typing would make it a clone and fight the brand.
   needed)
 - `ChatComposer.swift` (`cleanTrailingControl`, `sendButton`)
 - `ChatHaptics.swift` already fires `.messageSent` — keep it
+
+**Cross-platform.** **Must gate.** Unguarded `.transition` on
+`messageRow` animates macOS desktop and Quick Chat. Wrap insert
+transitions in `#if os(iOS)` or a `chatRowInsertionEnabled` that is
+true only for iOS + `.clean`. Symbol replace on send is iOS-only
+(`symbolEffect`). Do not change `ChatStreamingReveal` pacing.
 
 **Approach.**
 
@@ -274,7 +345,16 @@ like a custom control.
 - `ChatComposer.swift` (`cleanComposerCard`, `composerContextRows`)
 - `CleanChatComposerControls.swift` (`CleanChatComposerSurface`, metrics)
 - `ChatTalkActivityViews.swift`, `ChatReplyPreview.swift`,
-  `ChatProgressCard.swift`
+  `ChatProgressCard.swift`, `ChatToolActivityViews.swift` (only if
+  tool-row expand already fights the new height animation)
+
+**Cross-platform.** Composer height animation on `.clean` affects macOS
+window (also `.clean`) and must stay subtle there. **Do not** move the
+composer into `safeAreaInset` except under `#if os(iOS)` — macOS window
+uses a split view and desktop padding. Quick Chat has the composer
+disabled; attachment/talk height work must not add a 104pt empty bar.
+`ChatProgressCard` already has per-OS surfaces; animate height only,
+do not restyle macOS to glass.
 
 **Approach.**
 
@@ -288,6 +368,8 @@ like a custom control.
    on bubbles (`DESIGN.md`).
 4. Leave `ChatComposerTextViewIOS` sizing as the single height owner; wrap
    it, do not replace UITextView with `TextField`.
+5. `composerChrome == .clean` is shared with macOS. iOS-only layout
+   (safe area inset, keyboard) must use `#if os(iOS)`.
 
 **Acceptance.**
 
@@ -316,6 +398,8 @@ version of the canvas flash.
 
 - `apps/ios/Sources/Design/ChatProTab.swift`
 - `apps/ios/Tests/GatewayStatusBuilderTests.swift`
+
+**Cross-platform.** iOS shell only. No `OpenClawChatUI` change.
 
 **Approach.**
 
@@ -350,6 +434,13 @@ hosts to reuse that banner.
 - `ChatView.swift` (`jumpToLatestButton`, `ChatNoticeBanner`)
 - `apps/ios/Sources/Design/OpenClawProComponents.swift`
   (`openClawGlassButton`, `OpenClawNoticeBanner`)
+
+**Cross-platform.** Jump button and `ChatNoticeBanner` are shared in
+`ChatView`. Glass / `openClawGlassButton` is iOS 26-only — keep the
+current macOS circle/material. Do not import iOS `OpenClawNoticeBanner`
+into the shared kit (it lives in the iOS target). Prefer restyling
+`ChatNoticeBanner` with `OpenClawChatTheme` tokens so macOS stays
+in-package, or `#if os(iOS)` wrap an iOS-only banner.
 
 **Approach.**
 
@@ -386,6 +477,11 @@ Same-role consecutive messages read as isolated cards.
 - `ChatView.swift` (`messageListRows` / `messageRow`)
 - `ChatMessageViews.swift` only if grouped rows need slightly less
   vertical padding (10/12 → 8)
+
+**Cross-platform.** `Layout.messageSpacing` is already 12 iOS / 6 macOS.
+A grouping helper on `ChatTranscriptRow` is shared model — safe if it
+is data-only. Applying iOS 4–6pt grouped gaps on macOS would tighten
+desktop chat; apply spacing in the iOS layout branch only.
 
 **Approach.**
 
@@ -432,11 +528,17 @@ These look like product decisions, not leftovers.
 | Grey assistant bubbles in clean chrome | Already the iOS-native choice |
 | Canvas gradient (`OpenClawChatTheme.background`) | Deliberate vs `systemGroupedBackground`. Do not "fix" to grouped grey in these PRs |
 | Liquid Glass only on chrome / composer | `DESIGN.md`. No glass on bubbles, cards, or markdown |
-| Session list in Command Center / sidebar | Not an in-chat switcher. Do not add `showsSessionSwitcher: true` |
+| Session list in Command Center / sidebar | Not an in-chat switcher. Do not add `showsSessionSwitcher: true` on iOS |
+| `ChatProgressCard` platform surfaces | Already glass/material/macOS-split. Height animation only |
 | Settings, Talk tab, onboarding wizard, Watch, Agent Pro, Control UI WebView | Out of chat polish |
 | `SessionDashboardScreen` | Gateway Control UI, not transcript chrome |
 | Chat actions information architecture | Custom popover is awkward (fixed 560pt height) but that is a later chrome PR |
 | SQLite / config / protocol | Not a visual change; needs separate approval |
+| macOS desktop chat layout | `OpenClawChatWindowShell` + `openClawChatDesktopLayout`. Do not iOS-ify the sidebar or desktop composer |
+| macOS Quick Chat | Read-only 300pt `OpenClawChatView`; composer stays disabled. Do not add intro chips or a live composer |
+| `ChatToolActivityViews` flat rows | Deliberate Control UI parity. Do not wrap tools in chat bubbles |
+| `ChatStreamingReveal` timing | Already shared and tested. Not a polish knob |
+| `ChatTheme` macOS materials / `controlAccentColor` | Separate from iOS red/`systemGray5`. Do not unify palettes |
 | macOS full composer chrome | Shared-kit changes must no-op or stay behind `composerChrome == .clean` / `os(iOS)` |
 | Jump-to-latest show/hide rules | Already fixed a flash (`#108693`). Reuse `chatReaderShowsJumpToLatest` |
 
@@ -453,12 +555,18 @@ part of chat polish.
 ## 4. Upstream PR slices
 
 Land in this fork first, then open the same scoped diffs against
-`openclaw/openclaw`. Keep macOS behavior identical unless a change is a
-pure bugfix.
+`openclaw/openclaw`. Shared-kit files require an explicit macOS note in
+the PR body. Keep macOS behavior identical unless the change is a real
+shared flash (then say so and prove both).
+
+Upstream reviewers will treat `apps/shared/OpenClawKit/**` as a
+multi-client change. Title/scope should say `ios` only when the visual
+diff is gated; use a broader scope (`fix(chat): …`) if Slice A’s
+presentation enum is intentionally shared.
 
 ### Slice A — Stabilize Chat surfaces (mergeable alone)
 
-**Title (suggested):** `fix(ios): stop Chat empty/loading flashes`
+**Title (suggested):** `fix(chat): stop empty/loading flashes on iOS Chat`
 
 **Includes:** P1, P2, P5.
 
@@ -468,16 +576,24 @@ a motion language.
 
 **Diff bound.**
 
-- `apps/ios/Sources/Design/ChatProTab.swift`
-- `apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift`
-- Presentation helper (same files or a small new `ChatSurfacePresentation.swift`
-  next to `ChatView.swift`)
+- `apps/ios/Sources/Design/ChatProTab.swift` (P2 remount, P5 toolbar)
+- `apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift` (P1)
+- Presentation helper (same file or a small new
+  `ChatSurfacePresentation.swift` next to `ChatView.swift`)
 - Tests: `GatewayStatusBuilderTests.swift`, new
   `ChatSurfacePresentationTests.swift` in OpenClawKit
+- **Do not touch** `ChatMessageViews`, `ChatComposer*`, `ChatTheme`,
+  `ChatStreamingReveal`, `ChatProgressCard`, `ChatToolActivityViews`
+  in this slice
 
-**Proof.** Before/after screen recordings: cold launch, session switch,
-disconnect, empty new session, error with and without history. Reduce
-Motion on. Light and dark.
+**Shared-client risk.** P1 is shared. P2 and P5 are iOS-host-only.
+Call that split out in the PR. Quick Chat must still show a compact
+transcript with composer off.
+
+**Proof.** iOS before/after: cold launch, session switch, disconnect,
+empty new session, error with and without history. Reduce Motion.
+Light and dark. Plus a macOS desktop and Quick Chat smoke (or explicit
+“not run, residual risk” if this environment cannot build macOS).
 
 **Non-goals.** No new bubble animation, no composer restyle, no session
 list work.
@@ -491,17 +607,28 @@ a few-line spacing change.
 
 **Diff bound.**
 
-- `ChatView.swift`, `ChatComposer.swift`, `CleanChatComposerControls.swift`
-- Small helpers in `ChatMessageViews.swift` if needed
+- Shared, **iOS-gated:** `ChatView.swift`, `ChatComposer.swift`,
+  `CleanChatComposerControls.swift`, small helpers in
+  `ChatMessageViews.swift` if needed
+- Optional: `ChatProgressCard.swift` height only, no surface restyle
 - `apps/ios/DESIGN.md`: add a short **Motion** subsection (durations,
   Reduce Motion, no glass on content) so the next reviewer has a rule
+- **Do not touch** `ChatStreamingReveal.swift`, `ChatTheme.swift`
+  palettes, `ChatToolActivityViews` structure, `ChatWindowShell`,
+  `QuickChatView`
 
-**Proof.** Device or simulator recordings: send, stream start, attachment
-add, keyboard show, jump-to-latest, banner. iOS 18 and iOS 26. Dynamic
-Type XXXL. Reduce Motion.
+**Shared-client risk.** Highest of the two slices. Every transition
+needs `#if os(iOS)` or an equivalent host flag. macOS desktop `.clean`
+composer may get a quiet height animation if it is the same code path;
+that must be called out and visually checked. Quick Chat must not grow.
 
-**Non-goals.** No Messages tails, no system-blue bubbles, no claw removal,
-no Command Center restyle.
+**Proof.** iOS 18 and iOS 26 recordings: send, stream start, attachment
+add, keyboard show, jump-to-latest, banner. Dynamic Type XXXL. Reduce
+Motion. macOS desktop + Quick Chat screenshot pair proving no leak
+(or residual risk stated).
+
+**Non-goals.** No Messages tails, no system-blue bubbles, no claw
+removal, no Command Center restyle, no macOS sidebar/session-list work.
 
 ### Why not one PR
 
@@ -513,19 +640,28 @@ evidence that Slice A removed the states being animated.
 
 ## 5. Implementation notes for whoever codes this
 
-- Read `apps/ios/DESIGN.md` and `apps/ios/AGENTS.md` before editing.
+- Read `apps/ios/DESIGN.md`, `apps/ios/AGENTS.md`, and the shared files
+  listed in §1 before editing. macOS host policy is `apps/macos/AGENTS.md`
+  (do not add settings UI there; do not treat Quick Chat as a playground).
+- Shared package first: if the pixel lives in a bubble, row, composer, or
+  overlay, edit `OpenClawChatUI`, then only add iOS shell glue in
+  `ChatProTab`.
 - Keep `#available(iOS 26.0, *)` fallbacks with the same label, action,
   tint, accessibility, and hit target.
-- Prefer `#if os(iOS)` / `composerChrome == .clean` over behavior that
-  surprises macOS.
+- Prefer `#if os(iOS)` / `composerChrome == .clean` /
+  `!openClawChatDesktopLayout` over behavior that surprises macOS.
+  `composerChrome == .clean` alone is **not** an iOS gate (macOS window
+  and Quick Chat are also `.clean`).
 - New user-visible strings go through `String(localized:)`.
-- Typography tests: if a host `Text` / `Button` is touched, update
+- Typography: iOS host text uses `OpenClawType`; shared chat text uses
+  `OpenClawChatTypography`. If a host `Text` / `Button` is touched, update
   `apps/ios/Tests/OpenClawTypographyTests.swift`.
 - Do not add screenshot-only tests that mirror implementation. Prefer
   presentation-enum tests that fail on the old flash (P1) and scroll
   identity tests that fail on remount (P2).
 - Visual proof is required (`DESIGN.md` review checklist): matched
-  before/after, sanitized, light and dark.
+  before/after, sanitized, light and dark. Shared-kit PRs also need a
+  macOS non-regression note.
 
 ### Suggested first implementation order inside Slice A
 
@@ -549,5 +685,7 @@ It feels iOS-native in the ways people actually notice: one stable thread
 surface, no preparing/loading/empty shuffle, composer and keyboard that
 grow in place, a short bubble insert, a quiet connecting dot.
 
-Nothing in Settings, Talk, onboarding, or Command Center had to change to
-get there.
+Nothing in Settings, Talk, onboarding, Command Center, Watch, or the
+macOS sidebar had to change to get there. macOS desktop chat and Quick
+Chat keep their current layout unless Slice A’s shared flash fix
+quietly helps them too.
