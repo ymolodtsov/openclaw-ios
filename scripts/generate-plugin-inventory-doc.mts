@@ -456,9 +456,7 @@ ${record.docs.map((link) => `- ${docLink(link)}`).join("\n")}`;
 
 function stripGeneratedNotice(value: string) {
   const noticeStart = value.indexOf(GENERATED_REFERENCE_NOTICE);
-  return noticeStart === -1
-    ? value
-    : value.slice(noticeStart + GENERATED_REFERENCE_NOTICE.length);
+  return noticeStart === -1 ? value : value.slice(noticeStart + GENERATED_REFERENCE_NOTICE.length);
 }
 
 function extractManualReferenceSections(rawContent: string) {
