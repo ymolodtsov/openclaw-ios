@@ -602,6 +602,7 @@ struct RootTabsPresentationTests {
             encoding: .utf8)
         #expect(!source.contains(".id(ObjectIdentifier(viewModel))"))
         #expect(source.contains("chatCanvasIdentity("))
+        #expect(source.contains("enablesTasteMotion: true"))
     }
 
     @Test func `workboard dispatch summary reports started and failures`() throws {
