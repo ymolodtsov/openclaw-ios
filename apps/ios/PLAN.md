@@ -30,6 +30,24 @@ blocker for upstream, not a follow-up.
 
 ---
 
+## Agreed visual direction
+
+Preserve OpenClaw's red accent, gray assistant bubbles, and light/dark palette.
+Use compact native controls, restrained surfaces, and conversation-first
+spacing. Keep the branded typography helpers.
+
+- Float the composer over the transcript. Do not shrink the transcript viewport
+  or add an opaque footer; measure the complete bottom chrome and reserve that
+  height in a trailing content spacer. Keep the last message and jump-to-latest
+  action clear as input, attachments, and the keyboard change.
+- Start with a compact field and a separate attachment/options button. Move
+  model, effort, permissions, and context usage into that menu while preserving
+  their capability gates and discoverability. Retain voice and capture actions.
+- Keep navigation reachable while scrolling. Use at least 44-point targets and
+  expose unread/pinned status to VoiceOver.
+- Verify light/dark appearance, large text, Reduce Motion, long transcripts,
+  offline states, typing, and keyboard dismissal before calling the polish ready.
+
 ## 1. Chat UI architecture
 
 iOS Chat is a thin host around a shared SwiftUI canvas. Changing only
@@ -552,12 +570,12 @@ part of chat polish.
 
 ---
 
-## 4. Upstream PR slices
+## 4. Fork implementation stages
 
-Land in this fork first, then open the same scoped diffs against
-`openclaw/openclaw`. Shared-kit files require an explicit macOS note in
-the PR body. Keep macOS behavior identical unless the change is a real
-shared flash (then say so and prove both).
+Iterate in this fork, then consolidate the related iOS improvements into
+one PR against `openclaw/openclaw`. The stages below organize implementation
+and validation; they are not separate upstream submissions. Shared-kit
+files require an explicit macOS note and proof in the final PR body.
 
 Upstream reviewers will treat `apps/shared/OpenClawKit/**` as a
 multi-client change. Title/scope should say `ios` only when the visual
@@ -618,9 +636,8 @@ a few-line spacing change.
   `QuickChatView`
 
 **Shared-client risk.** Highest of the two slices. Every transition
-needs `#if os(iOS)` or an equivalent host flag. macOS desktop `.clean`
-composer may get a quiet height animation if it is the same code path;
-that must be called out and visually checked. Quick Chat must not grow.
+needs `#if os(iOS)` or an equivalent host flag. Keep macOS desktop motion
+and layout unchanged. Quick Chat must not grow.
 
 **Proof.** iOS 18 and iOS 26 recordings: send, stream start, attachment
 add, keyboard show, jump-to-latest, banner. Dynamic Type XXXL. Reduce
@@ -630,11 +647,12 @@ Motion. macOS desktop + Quick Chat screenshot pair proving no leak
 **Non-goals.** No Messages tails, no system-blue bubbles, no claw
 removal, no Command Center restyle, no macOS sidebar/session-list work.
 
-### Why not one PR
+### One upstream PR
 
-Slice A is correctness. Slice B is taste. Upstream is more likely to merge
-a flash fix than a motion pass bundled with it. Slice B also needs visual
-evidence that Slice A removed the states being animated.
+The final contribution should explain one coherent iOS usability improvement,
+include matched visual evidence, and preserve contributor credit. Validate
+state and lifecycle repairs before adding motion, then submit the completed
+work together. Broader unrelated features stay outside this contribution.
 
 ---
 
